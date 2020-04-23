@@ -1,0 +1,15 @@
+time  python3 -m openpifpaf.train \
+  --batch-size=32 \
+  --basenet=shufflenetv2x2 \
+  --head-quad=1 \
+  --epochs=150 \
+  --momentum=0.9 \
+  --headnets pif paf paf25 \
+  --lambdas 30 2 2 50 3 3 50 3 3 \
+  --loader-workers=16 \
+  --lr=0.1 \
+  --lr-decay 120 140 \
+  --no-pretrain \
+  --weight-decay=1e-5 \
+  --update-batchnorm-runningstatistics \
+  --ema=0.03
