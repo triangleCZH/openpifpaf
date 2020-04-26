@@ -134,6 +134,7 @@ class MultiHeadLoss(torch.nn.Module):
                             for l, f, t in zip(self.losses, head_fields, head_targets)
                             for ll in l(f, t)]
 
+
         assert len(self.lambdas) == len(flat_head_losses)
         loss_values = [lam * l
                        for lam, l in zip(self.lambdas, flat_head_losses)
@@ -260,6 +261,7 @@ class CompositeLoss(torch.nn.Module):
         if self.background_weight != 1.0:
             bce_weight = torch.ones_like(bce_target)
             bce_weight[bce_target == 0] = self.background_weight
+#         print('TRIANGE loss', bce_x_intensity.shape, bce_masks.shape)
         ce_loss = torch.nn.functional.binary_cross_entropy_with_logits(
             torch.masked_select(bce_x_intensity, bce_masks),
             bce_target,

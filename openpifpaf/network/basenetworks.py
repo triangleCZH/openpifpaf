@@ -4,7 +4,7 @@ import torch
 LOG = logging.getLogger(__name__)
 from .conv import conv, conv_dw, conv_dw_no_bn
 import torch.nn as nn
-
+from . import heads
 
 class BaseNetwork(torch.nn.Module):
     """Common base network."""
@@ -25,7 +25,7 @@ class BaseNetwork(torch.nn.Module):
         return self.net(*args)
 
 class MobileNetFactory(torch.nn.Module):
-    def __init__(self, out_features, input_output_scale, num_heatmaps = 170, num_pafs = 380):
+    def __init__(self, out_features, input_output_scale, num_heatmaps = 170, num_pafs = 380, nettype='pifpaf', headnames=None):
         super().__init__()
         self.out_features = out_features
         self.input_output_scale = input_output_scale
@@ -36,7 +36,7 @@ class MobileNetFactory(torch.nn.Module):
             conv_dw(128, 128),
             conv_dw(128, 256, stride=2),
             conv_dw(256, 256),
-            conv_dw(256, 512),  # conv4_2
+            conv_dw(256, 512, stride=2),  # conv4_2
             conv_dw(512, 512, dilation=2, padding=2),
             conv_dw(512, 512),
             conv_dw(512, 512),
@@ -44,35 +44,68 @@ class MobileNetFactory(torch.nn.Module):
             conv_dw(512, out_features)   # conv5_5
         )
 
-        num_channels = 512
-        nettype = 'cpmaff'
+        num_channels = 300
+        self.nettype = nettype
+        if nettype == 'cpmaff':
         
         
-        num_refinement_stages = 1
+            num_refinement_stages = 1
 
-        self.cpm = Cpm(out_features, num_channels)
-        self.initial_stage = CPMInitialStage(num_channels, num_heatmaps, num_pafs, nettype)
-        self.refinement_stages = nn.ModuleList()
+            self.cpm = Cpm(out_features, num_channels)
+            self.initial_stage = CPMInitialStage(num_channels, num_heatmaps, num_pafs, nettype)
+            self.refinement_stages = nn.ModuleList()
 
-        intermediate_channel = num_channels + num_heatmaps + num_pafs
-        for idx in range(num_refinement_stages):
-            self.refinement_stages.append(CPMRefinementStage(intermediate_channel, num_channels,
-                                                          num_heatmaps, num_pafs, nettype))  
-        self.num_channels = [num_heatmaps, num_pafs]
-        self.num_heatmaps = num_heatmaps
-        self.num_pafs = num_pafs
+            intermediate_channel = num_channels + num_heatmaps + num_pafs
+            for idx in range(num_refinement_stages):
+                self.refinement_stages.append(CPMRefinementStage(intermediate_channel, num_channels,
+                                                              num_heatmaps, num_pafs, nettype))  
+            self.num_channels = [num_heatmaps, num_pafs]
+            self.num_heatmaps = num_heatmaps
+            self.num_pafs = num_pafs
+        elif nettype == 'comaff':
+
+            num_refinement_stages = 1
+            
+            self.cpm = Cpm(out_features, num_channels)
+
+            self.initial_stage = CPMInitialStage(num_channels, num_heatmaps, num_pafs, nettype, headnames)
+            self.refinement_stages = nn.ModuleList()
+
+            intermediate_channel = num_channels + 340 + 532 # heatmaps and pafs
+            for idx in range(num_refinement_stages):
+                self.refinement_stages.append(CPMRefinementStage(intermediate_channel, num_channels, num_heatmaps, num_pafs, nettype, headnames))  
+            self.num_channels = [num_heatmaps, num_pafs]
+            self.num_heatmaps = num_heatmaps
+            self.num_pafs = num_pafs            
 
 
     def forward(self, x):
+#         print('TRIANGLE before backbone', x.shape)
         x = self.model(x)
-        backbone_features = self.cpm(x)
+        if self.nettype == 'cpmaff':
+            backbone_features = self.cpm(x)
 
-        stages_output = self.initial_stage(backbone_features)
-        for refinement_stage in self.refinement_stages:
-            stages_output.extend(
-                    refinement_stage(torch.cat([backbone_features, stages_output[-2], stages_output[-1]], dim=1)))
+            stages_output = self.initial_stage(backbone_features)
+            for refinement_stage in self.refinement_stages:
+                stages_output.extend(
+                        refinement_stage(torch.cat([backbone_features, stages_output[-2], stages_output[-1]], dim=1)))
 
-        return stages_output[-2], stages_output[-1]
+            return stages_output[-2], stages_output[-1]
+        elif self.nettype == 'comaff':
+            backbone_features = self.cpm(x)
+
+            stages_output, dequad_output = self.initial_stage(backbone_features)
+#             print("TRIANGLE output of initial stage", len(stages_output))
+            for refinement_stage in self.refinement_stages:
+                stage2_output = refinement_stage(torch.cat([backbone_features] + stages_output, dim=1))
+            
+#             print('TRIANGLE loss', len(dequad_output), len(stage2_output)) #, dequad_output[0].shape, stage2_output[0].shape)
+
+            return dequad_output, stage2_output
+            
+        else:
+#             print('TRIANGLE after backbone', x.shape)
+            return x
 
 class ShuffleNetV2Factory(object):
     def __init__(self, torchvision_shufflenetv2):
@@ -183,7 +216,7 @@ class Cpm(nn.Module):
 
 
 class CPMInitialStage(nn.Module):
-    def __init__(self, num_channels, num_heatmaps, num_pafs, nettype="cpmaff"):
+    def __init__(self, num_channels, num_heatmaps, num_pafs, nettype="cpmaff", headnames=None):
         # type: 'cpm' for joint detectionm 'aff' for alignment, 'cpmaff' for both stages
         super().__init__()
         self.nettype = nettype
@@ -192,19 +225,28 @@ class CPMInitialStage(nn.Module):
             conv(num_channels, num_channels, bn=False),
             conv(num_channels, num_channels, bn=False)
         )
-        if 'cpm' in nettype:
-            self.heatmaps = nn.Sequential(
-                conv(num_channels, 512, kernel_size=1, padding=0, bn=False),
-                conv(512, num_heatmaps, kernel_size=1, padding=0, bn=False, relu=False)
-            )
-        if 'aff' in nettype:
-            self.pafs = nn.Sequential(
-                conv(num_channels, 512, kernel_size=1, padding=0, bn=False),
-                conv(512, num_pafs, kernel_size=1, padding=0, bn=False, relu=False)
-            )
+        if nettype == 'comaff':
+            self.heatmaps = heads.factory(headnames[0], num_channels, initial_stage=True)
+            self.pafs = heads.factory(headnames[1], num_channels, initial_stage=True)
+        else:
+            if 'cpm' in nettype:
+                self.heatmaps = nn.Sequential(
+                    conv(num_channels, 512, kernel_size=1, padding=0, bn=False),
+                    conv(512, num_heatmaps, kernel_size=1, padding=0, bn=False, relu=False)
+                )
+            if 'aff' in nettype:
+                self.pafs = nn.Sequential(
+                    conv(num_channels, 512, kernel_size=1, padding=0, bn=False),
+                    conv(512, num_pafs, kernel_size=1, padding=0, bn=False, relu=False)
+                )
 
     def forward(self, x):
         trunk_features = self.trunk(x)
+        if self.nettype == 'comaff':
+            heatmaps, dequad_heatmaps = self.heatmaps(trunk_features)
+            pafs, dequad_pafs = self.pafs(trunk_features)
+#             print("TRIANGLE. INITIAL stage", len(heatmaps),len(pafs))
+            return heatmaps + pafs, [dequad_heatmaps, dequad_pafs]   
         if 'cpm' == self.nettype:
             heatmaps = self.heatmaps(trunk_features)
             return [heatmaps]
@@ -232,7 +274,7 @@ class CPMRefinementStageBlock(nn.Module):
 
 
 class CPMRefinementStage(nn.Module):
-    def __init__(self, in_channels, out_channels, num_heatmaps, num_pafs, nettype="cpmaff"):
+    def __init__(self, in_channels, out_channels, num_heatmaps, num_pafs, nettype="cpmaff", headnames=None):
         super().__init__()
         self.nettype = nettype
         self.trunk = nn.Sequential(
@@ -242,19 +284,27 @@ class CPMRefinementStage(nn.Module):
             CPMRefinementStageBlock(out_channels, out_channels),
             CPMRefinementStageBlock(out_channels, out_channels)
         )
-        if 'cpm' in nettype:
-            self.heatmaps = nn.Sequential(
-                conv(out_channels, out_channels, kernel_size=1, padding=0, bn=False),
-                conv(out_channels, num_heatmaps, kernel_size=1, padding=0, bn=False, relu=False)
-            )
-        if 'aff' in nettype:
-            self.pafs = nn.Sequential(
-                conv(out_channels, out_channels, kernel_size=1, padding=0, bn=False),
-                conv(out_channels, num_pafs, kernel_size=1, padding=0, bn=False, relu=False)
-            )
+        if nettype == 'comaff':
+            self.heatmaps = heads.factory(headnames[0], out_channels)
+            self.pafs = heads.factory(headnames[1], out_channels)
+        else:
+            if 'cpm' in nettype:
+                self.heatmaps = nn.Sequential(
+                    conv(out_channels, out_channels, kernel_size=1, padding=0, bn=False),
+                    conv(out_channels, num_heatmaps, kernel_size=1, padding=0, bn=False, relu=False)
+                )
+            if 'aff' in nettype:
+                self.pafs = nn.Sequential(
+                    conv(out_channels, out_channels, kernel_size=1, padding=0, bn=False),
+                    conv(out_channels, num_pafs, kernel_size=1, padding=0, bn=False, relu=False)
+                )
 
     def forward(self, x):
         trunk_features = self.trunk(x)
+        if self.nettype == 'comaff':
+            heatmaps = self.heatmaps(trunk_features)
+            pafs = self.pafs(trunk_features)
+            return [heatmaps, pafs]  
         if 'cpm' == self.nettype:
             heatmaps = self.heatmaps(trunk_features)
             return [heatmaps]

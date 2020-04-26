@@ -1,11 +1,11 @@
-time  python3 -m openpifpaf.train \
-  --batch-size=32 \
+CUDA_VISIBLE_DEVICES=0,1 python3.5 -m openpifpaf.train \
+  --batch-size=8 \
   --basenet=mobilenetv1 \
   --head-quad=1 \
-  --epochs=150 \
+  --epochs=10 \
   --momentum=0.9 \
-  --headnets pif paf paf25\
-  --lambdas 30 2 2 50 3 3 50 3 3 \
+  --headnets pif paf\
+  --lambdas 30 2 2 50 3 3\
   --loader-workers=16 \
   --lr=0.1 \
   --lr-decay 120 140 \

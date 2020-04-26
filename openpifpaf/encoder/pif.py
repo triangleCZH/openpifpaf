@@ -130,7 +130,11 @@ class PifGenerator(object):
         offset = offset.reshape(2, 1, 1)
 
         # update intensity
-        self.intensities[f, miny:maxy, minx:maxx] = 1.0
+#         self.intensities[f, miny:maxy, minx:maxx] = 1.0
+        sigma = 4
+        for x in range(minx, maxx):
+            for y in range(miny, maxy):
+                self.intensities[f, y, x] = np.exp(-((x - xyv[0]) ** 2 + (y - xyv[1]) ** 2) / (sigma) ** 2 / 2)
 
         # update regression
         sink_reg = self.sink + offset

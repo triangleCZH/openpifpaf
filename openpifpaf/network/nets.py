@@ -28,27 +28,35 @@ LOG = logging.getLogger(__name__)
 
 class Shell(torch.nn.Module):
     def __init__(self, base_net, head_nets, *,
-                 head_names=None, head_strides=None, process_heads=None, cross_talk=0.0, nettype='PIFPAF'):
+                 head_names=None, head_strides=None, process_heads=None, cross_talk=0.0, nettype='pifpaf'):
         super(Shell, self).__init__()
 
         self.base_net = base_net
-        self.head_nets = torch.nn.ModuleList(head_nets)
-        self.head_names = head_names or [
-            h.shortname for h in head_nets
-        ]
+     
+        self.nettype = nettype
+        
+        if nettype != 'comaff':
+            
+            self.head_nets = torch.nn.ModuleList(head_nets)
+            self.head_names = head_names or [
+                h.shortname for h in head_nets
+            ]
 
-        print('TRIANGLE DEBUG')
-        for idx, hn in enumerate(self.head_nets):
-            print(self.head_names[idx], '===============')
-            print(hn)
-        self.head_strides = head_strides or [
-            base_net.input_output_scale // (2 ** getattr(h, '_quad', 0))
-            for h in head_nets
-        ]
+    #         print('TRIANGLE DEBUG')
+    #         for idx, hn in enumerate(self.head_nets):
+    #             print(self.head_names[idx], '===============')
+    #             print(hn)
+            self.head_strides = head_strides or [
+                base_net.input_output_scale // (2 ** getattr(h, '_quad', 0))
+                for h in head_nets
+            ]
+    #         print('TRIANGLE stride', self.head_strides, getattr(head_nets[0], '_quad', 0))
+            
+        else:
+            self.head_strides = [8, 8]
         self.process_heads = process_heads
         self.cross_talk = cross_talk
 
-        self.nettype = nettype
 
     def forward(self, *args):
         headdic = {'pif': 0, 'paf': 1, 'paf25': 1}
@@ -58,13 +66,16 @@ class Shell(torch.nn.Module):
             rolled_images = torch.cat((image_batch[-1:], image_batch[:-1]))
             image_batch += rolled_images * self.cross_talk
 
-        if self.nettype == 'CPMARR':
+        if self.nettype == 'cpmaff':
             # = [heatmap, paf]
             stage_outputs = self.base_net(image_batch)
             head_outputs = [hn(stage_outputs[headdic[self.head_names[idx]]]) for idx, hn in enumerate(self.head_nets)]
+        elif self.nettype == 'comaff':
+            head_outputs = self.base_net(image_batch)
         else:
             x = self.base_net(image_batch)
             head_outputs = [hn(x) for hn in self.head_nets]
+
 
         if self.process_heads is not None:
             head_outputs = self.process_heads(*head_outputs)
@@ -436,11 +447,22 @@ def resnet_factory_from_scratch(basename, base_vision, out_features, headnames):
     model_defaults(net_cpu)
     return net_cpu
 
-def mobilenet_factory_from_scratch(basename, base_vision, out_features, headnames):
-    basenet = basenetworks.MobileNetFactory(input_output_scale=16, out_features=out_features)
+def mobilenet_factory_from_scratch(basename, base_vision, out_features, headnames, nettype='pifpaf'):
+    nettype = 'comaff'
     headdic = {'pif': 0, 'paf': 1, 'paf25': 1}
-    headnets = [heads.factory(h, basenet.num_channels[headdic[h]]) for h in headnames if h != 'skeleton']
-    net_cpu = Shell(basenet, headnets, nettype='CPMAFF')
+    if nettype == 'pifpaf':
+        basenet = basenetworks.MobileNetFactory(input_output_scale=16, out_features=out_features, nettype=nettype)
+        headnets = [heads.factory(h, basenet.out_features) for h in headnames if h != 'skeleton']
+    elif nettype == 'comaff':
+        basenet = basenetworks.MobileNetFactory(input_output_scale=16, out_features=out_features, nettype=nettype, headnames=headnames)
+        net_cpu = Shell(basenet, head_nets = None, nettype=nettype)
+        model_defaults(net_cpu)
+        return net_cpu        
+        
+    else: # cpmaff
+        basenet = basenetworks.MobileNetFactory(input_output_scale=16, out_features=out_features, nettype=nettype)
+        headnets = [heads.factory(h, basenet.num_channels[headdic[h]]) for h in headnames if h != 'skeleton']
+    net_cpu = Shell(basenet, headnets, nettype=nettype)
     model_defaults(net_cpu)
     return net_cpu
 

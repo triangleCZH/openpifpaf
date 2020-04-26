@@ -20,7 +20,8 @@ class Trainer(object):
                  ema_decay=None,
                  encoder_visualizer=None,
                  train_profile=None,
-                 model_meta_data=None):
+                 model_meta_data=None,
+                 nettype='comaff'):
         self.model = model
         self.loss = loss
         self.optimizer = optimizer
@@ -38,6 +39,8 @@ class Trainer(object):
 
         self.encoder_visualizer = encoder_visualizer
         self.model_meta_data = model_meta_data
+        
+        self.nettype=nettype
 
         if train_profile:
             # monkey patch to profile self.train_batch()
@@ -110,19 +113,26 @@ class Trainer(object):
             targets = [[t.to(self.device, non_blocking=True) for t in head] for head in targets]
 
         # train encoder
-        with torch.autograd.profiler.record_function('model'):
+        if self.nettype == 'comaff':
+            output1, output2 = self.model(data)
+            loss1, head_losses1 = self.loss(output1, targets)
+            loss2, head_losses2 = self.loss(output2, targets) 
+            loss = (loss1 + loss2) / 2
+            head_losses = [(head_losses1[idx] + head_losses2[idx]) / 2 if head_losses1[idx] and head_losses2[idx] else None for idx in range(len(head_losses1))]
+        else:            
             outputs = self.model(data)
-        with torch.autograd.profiler.record_function('loss'):
             loss, head_losses = self.loss(outputs, targets)
+#         print("TRIANGLE loss", loss)
+#         print('TRIANGLE head loss', head_losses)
         if loss is not None:
-            with torch.autograd.profiler.record_function('backward'):
-                loss.backward()
+#             with torch.autograd.profiler.record_function('backward'):
+            loss.backward()
         if apply_gradients:
-            with torch.autograd.profiler.record_function('step'):
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-            with torch.autograd.profiler.record_function('ema'):
-                self.step_ema()
+#             with torch.autograd.profiler.record_function('step'):
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+#             with torch.autograd.profiler.record_function('ema'):
+            self.step_ema()
 
         return (
             float(loss.item()) if loss is not None else None,
@@ -136,8 +146,18 @@ class Trainer(object):
             targets = [[t.to(self.device, non_blocking=True) for t in head] for head in targets]
 
         with torch.no_grad():
-            outputs = self.model(data)
-            loss, head_losses = self.loss(outputs, targets)
+            
+            if self.nettype == 'comaff':
+                output1, output2 = self.model(data)
+                loss1, head_losses1 = self.loss(output1, targets)
+                loss2, head_losses2 = self.loss(output2, targets) 
+                loss = (loss1 + loss2) / 2
+#                 print('TRIANGLE head', len(head_losses1), len(head_losses2))
+#                 print(head_losses1, head_losses2)
+                head_losses = [(head_losses1[idx] + head_losses2[idx]) / 2 if head_losses1[idx] and head_losses2[idx] else None for idx in range(len(head_losses1))]
+            else:
+                outputs = self.model(data)
+                loss, head_losses = self.loss(outputs, targets)
 
         return (
             float(loss.item()) if loss is not None else None,
