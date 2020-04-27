@@ -10,7 +10,7 @@ cd openpifpaf
 python3 -m pip install --editable '.[train,test]'
 
 time  python3 -m openpifpaf.train \
-  --batch-size=32 \
+  --batch-size=8 \
   --basenet=mobilenetv1 \
   --head-quad=1 \
   --epochs=150 \
