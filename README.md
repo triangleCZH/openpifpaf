@@ -15,8 +15,8 @@ time  python3 -m openpifpaf.train \
   --head-quad=1 \
   --epochs=150 \
   --momentum=0.9 \
-  --headnets pif paf paf25\
-  --lambdas 30 2 2 50 3 3 50 3 3 \
+  --headnets pif paf\
+  --lambdas 30 2 2 50 3 3\
   --loader-workers=16 \
   --lr=0.1 \
   --lr-decay 120 140 \
